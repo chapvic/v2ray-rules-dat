@@ -1,0 +1,64 @@
+name: release
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * 3"
+
+env:
+  ACTION_FILENAME: release.yml
+  TARGET: Loyalsoldier/v2ray-rules-dat
+  DEFAULT_BRANCH: master
+  REQUIRED_FILES: |
+    geoip.dat
+    geoip.dat.sha256sum
+    geosite.dat
+    geosite.dat.sha256sum
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check and release
+        run: |
+          set -ex
+
+          TARGET_TAG_URL="https://api.github.com/repos/${TARGET}/releases/latest"
+          TARGET_LATEST_VER="$(curl -sS --connect-timeout 30 "${TARGET_TAG_URL}" | grep 'tag_name' | cut -d\" -f4)"
+          NORMALIZED_TARGET_TAG="${TARGET_LATEST_VER//[^0-9]/}"
+          TARGET_DIST_URLS="$(curl -sS --connect-timeout 30 "${TARGET_TAG_URL}" | grep 'browser_download_url' | cut -d\" -f4)"
+
+          DIST_TAGS_URL="https://api.github.com/repos/${{ github.repository }}/tags"
+          DIST_TAG_FOUND="$(curl -sS --connect-timeout 30 "${DIST_TAGS_URL}" | grep "\"name\": \"${NORMALIZED_TARGET_TAG}\"" || true)"
+
+          if [ -z "${DIST_TAG_FOUND}" ]; then
+            for line in ${TARGET_DIST_URLS}; do
+              wget -q "${line}"
+            done
+
+            ls ${REQUIRED_FILES}
+
+            mkdir -p .github/workflows
+            wget -O .github/workflows/release.yml \
+              "https://github.com/${{ github.repository }}/raw/${DEFAULT_BRANCH}/.github/workflows/${ACTION_FILENAME}"
+
+            git init -b "${DEFAULT_BRANCH}"
+            git config --local user.name "${GITHUB_ACTOR}"
+            git config --local user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+
+            git add .
+            git commit -m "Version ${TARGET_LATEST_VER}"
+            git tag -a "${NORMALIZED_TARGET_TAG}" -m "Version ${TARGET_LATEST_VER}"
+
+            git remote add origin \
+              "https://${GITHUB_ACTOR}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+            git push -u --force --follow-tags origin "${DEFAULT_BRANCH}"
+          fi
